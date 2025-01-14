@@ -67,6 +67,23 @@ class Program
         lastMeasurement = measuredAt;
     }
 
+    static void EndTest(ClrEventListener listener, bool print) {
+        if (print)
+        {
+            CollectUsageLinux(true);
+        }
+
+        Thread.Sleep(100); // Allow EventPipe to catch up
+
+        if (print)
+        {
+            Console.WriteLine("{0} EventPipe events received, {1} exceptions thrown\n", listener.EventCount, exceptions);
+        }
+
+        listener.EventCount = exceptions = 0;
+        CollectUsageLinux(false);
+    }
+
     static void DoNothing()
     {
         Interlocked.Increment(ref threadCount);
@@ -98,10 +115,6 @@ class Program
             return;
         }
 
-        Console.WriteLine("Throwing and catching 1000 exceptions (warm up JIT)\n");
-
-        ThrowCatchExceptions(1000);
-
         int numThreads = int.Parse(args[0]);
         int numExceptions = int.Parse(args[1]);
         bool eventPipeEnabled = true;
@@ -113,21 +126,25 @@ class Program
         ClrEventListener listener = new ClrEventListener(eventPipeEnabled);
         Thread thread;
 
-        CollectUsageLinux(false);
-        listener.EventCount = exceptions = 0;
+
+        // Warm up JIT in case it affects results
+        Console.WriteLine("Throwing and catching 1000 exceptions (warm up JIT)\n");
+
+        ThrowCatchExceptions(1000);
+
+        EndTest(listener, false);
 
 
+        // Measurement 1 - should work normally, no issues
         Console.WriteLine("Throwing and catching {0} exceptions", numExceptions);
 
         ThrowCatchExceptions(numExceptions);
 
-        CollectUsageLinux(true);
-        Thread.Sleep(100); // Allow EventPipe to catch up
-        Console.WriteLine("{0} EventPipe events received, {1} exceptions thrown\n", listener.EventCount, exceptions);
-        listener.EventCount = exceptions = 0;
-        CollectUsageLinux(false);
+        EndTest(listener, true);
 
 
+        // Spawn threads to trigger EventPipe leak. Will also show fewer events,
+        // more CPU as threads increase due to EventPipe
         Console.WriteLine("Spawning {0} short-lived threads", numThreads);
 
         for (int i = 0; i < numThreads; i++)
@@ -137,39 +154,31 @@ class Program
             thread.Join();
         }
 
-        CollectUsageLinux(true);
-        Thread.Sleep(100); // Allow EventPipe to catch up
-        Console.WriteLine("{0} EventPipe events received, {1} exceptions thrown\n", listener.EventCount, exceptions);
-        listener.EventCount = exceptions = 0;
-        CollectUsageLinux(false);
+        EndTest(listener, true);
 
 
+        // Measurement 2 - should show fewer events, more CPU as threads increase
         Console.WriteLine("Throwing and catching {0} exceptions", numExceptions);
 
         ThrowCatchExceptions(numExceptions);
 
-        CollectUsageLinux(true);
-        Thread.Sleep(100); // Allow EventPipe to catch up
-        Console.WriteLine("{0} EventPipe events received, {1} exceptions thrown\n", listener.EventCount, exceptions);
-        listener.EventCount = exceptions = 0;
-        CollectUsageLinux(false);
+        EndTest(listener, true);
 
 
         if (eventPipeEnabled && listener.EventSource != null)
         {
+            // Create new, identical EventPipe session to reset performance
             Console.WriteLine("Reconfiguring EventPipe with identical settings\n", numExceptions);
             listener.EnableEvents(listener.EventSource, EventLevel.Informational, (EventKeywords) 0x8000); // 0x8000 means watch exceptions
+            CollectUsageLinux(false);
 
 
+            // Measurement 3 - should work normally, no issues
             Console.WriteLine("Throwing and catching {0} exceptions", numExceptions);
 
             ThrowCatchExceptions(numExceptions);
 
-            CollectUsageLinux(true);
-            Thread.Sleep(100); // Allow EventPipe to catch up
-            Console.WriteLine("{0} EventPipe events received, {1} exceptions thrown\n", listener.EventCount, exceptions);
-            listener.EventCount = exceptions = 0;
-            CollectUsageLinux(false);
+            EndTest(listener, true);
         }
     }
 }
